@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# by Christopher Peterson
+# original script by Christopher Peterson
 # https://chrispeterson.info
+# https://github.com/cspeterson/lastpass-dmenu
+
+# modified by Paul Methfessel
+# https://paulmethfessel.com
+# https://github.com/Paulpanther/lastpass-dmenu
 
 ######
 # Argpargse
@@ -8,10 +13,12 @@
 
 read -r -d '' helpoutput <<EOF
   Usage:
-    ${0} [OPTIONS]... [copy|type]
+    ${0} [OPTIONS]... [username|password|all] [copy|type]
 
       Pop-up LastPass desktop quick-search. Puts the selection into the
       clipboard or has xdotool type it out for you.
+
+      Stores the last selection in ~/.last_lastpass_selection.txt
 
   Options:
     -n, --notes
@@ -22,6 +29,9 @@ read -r -d '' helpoutput <<EOF
         Default: disabled
 
   Positional arguments:
+    [username|password|all]
+        Specify what info to use. If 'all' and method is 'type', it will 
+	type the username, type a tab and type the password
     [copy|type]
         Specify what to do with the selected password/note: copy to the
         clipboard, or have xdotool type it for you.
@@ -30,7 +40,7 @@ read -r -d '' helpoutput <<EOF
     Put the password into the clipboard:
         ${0} copy
 
-    Have the script type out the password for you:
+    Have the script type out the info for you:
         ${0} type
 
     Copy any secure notes in the selection:
@@ -67,9 +77,6 @@ for opt in "$@"; do
   esac
 done
 
-# Defaults
-lpass_field='password'
-
 # Back to the beginning now and get our opts
 OPTIND=1
 while getopts ':nh' opt; do
@@ -90,9 +97,22 @@ while getopts ':nh' opt; do
 done
 
 shift $(( OPTIND - 1 ))
-subcommand="${1}"
-if [ "${subcommand}" != 'type' ] && [ "${subcommand}" != 'copy' ]; then
-  echo "Incorrect subcommand. Must be 'type' or 'copy'" >&2
+valuetype="${1}"
+method="${2}"
+if [ "${method}" != 'type' ] && [ "${method}" != 'copy' ]; then
+  echo "Incorrect value type. Must be 'password', 'username' or 'all'" >&2
+  echo
+  echo "${helpoutput}" >&2
+  exit 1
+fi
+if [ "${valuetype}" != 'password' ] && [ "${valuetype}" != 'all' ] && [ "${valuetype}" != 'username' ]; then
+  echo "Incorrect value type. Must be 'password', 'username' or 'all'" >&2
+  echo
+  echo "${helpoutput}" >&2
+  exit 1
+fi
+if [ "${valuetype}" == 'all' ] && [ "${method}" != 'type' ]; then
+  echo "Incorrect value type - method combination. Method 'copy' and value type 'all' ar invalid together" >&2
   echo
   echo "${helpoutput}" >&2
   exit 1
@@ -117,20 +137,35 @@ if ! lpass status; then
   exit 1
 fi
 
+selection_file="$HOME/.lastpass_last_selection.txt"
+
+if [ -f "${selection_file}" ]; then
+  read last_selection < "${selection_file}"
+  entries=("${last_selection}" "${entries[@]}")
+fi
+
 # Get selection from user via dmenu
-selid=$(
+selection=$(
   printf '%s\n' "${entries[@]}" |
-  dmenu -i -p 'LastPass: ' -l 7 |
-  sed 's/^.*\[id: \([0-9]\{1,\}\)\].*$/\1/'
-  )
+  dmenu -i -p 'LastPass: ' -l 7
+)
+selid=$(echo "$selection" | sed 's/^.*\[id: \([0-9]\{1,\}\)\].*$/\1/')
 if [ -z "${selid}" ]; then
   echo 'Nothing selected. Exiting.' >&2
   exit 0
 fi
 
-if [ "${subcommand}" == 'type' ]; then
-  lpass show "--${lpass_field}" "${selid}" | xdotool -
-else
-  # Result to clipboard
-  lpass show --clip "--${lpass_field}" "${selid}"
+echo "$selection" > "${selection_file}"
+
+if [ "${method}" == 'type' ]; then
+  if [ "${valuetype}" == 'all' ]; then
+    xdotool type `lpass show "--username" "${selid}"`
+    xdotool key 0xff09
+    xdotool type `lpass show "--password" "${selid}"`
+  else
+    xdotool type `lpass show "--${valuetype}" "${selid}"`
+  fi
+fi
+if [ "${method}" == 'copy' ]; then
+  lpass show "--${valuetype}" "${selid}" | xclip -selection c
 fi
